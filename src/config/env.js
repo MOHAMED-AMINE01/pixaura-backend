@@ -11,6 +11,16 @@ module.exports = {
   smtpPort: Number(process.env.SMTP_PORT || 587),
   smtpUser: process.env.SMTP_USER,
   smtpPass: process.env.SMTP_PASS,
-  /** Origine(s) du front pour CORS — trim pour éviter les espaces après = dans .env */
-  frontendUrl: (process.env.FRONTEND_URL || "http://localhost:3000").trim(),
+  /**
+   * Origine(s) du front pour CORS.
+   * trim : enlève les espaces après "=" dans .env.
+   * replace : supprime le(s) slash(es) final(aux) — le navigateur envoie l'Origin
+   * SANS slash final, donc "https://site.com/" ne matcherait pas "https://site.com".
+   * Gère aussi une liste séparée par des virgules.
+   */
+  frontendUrl: (process.env.FRONTEND_URL || "http://localhost:3000")
+    .split(",")
+    .map((s) => s.trim().replace(/\/+$/, ""))
+    .filter(Boolean)
+    .join(","),
 };
