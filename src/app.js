@@ -7,6 +7,7 @@ const clientRoutes = require("./routes/clients");
 const adminRoutes = require("./routes/admin");
 const requestRoutes = require("./routes/requests");
 const calendarRoutes = require("./routes/calendar");
+const contactRoutes = require("./routes/contact");
 
 const app = express();
 
@@ -29,5 +30,6 @@ app.use("/api/clients", clientRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/requests", requestRoutes);
 app.use("/api/calendar", calendarRoutes);
+app.use("/api/contact", contactRoutes);
 
 module.exports = app;

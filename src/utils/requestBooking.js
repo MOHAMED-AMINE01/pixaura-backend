@@ -14,12 +14,12 @@ const {
 const {
   FULL_DAY_SLOT_ID,
   isFullDaySlotId,
-  isRequestFullDay,
 } = require("../constants/timeSlots");
 const { P2C_COUNTING_STATUSES, validateP2cBooking, monthBounds } = require("./p2cQuota");
 const { mergeP2cWorkflowRequests, validateP2cSlotRules } = require("./p2cProjects");
 const ClientMonthAccess = require("../models/ClientMonthAccess");
 const { isClientMonthOpen } = require("./clientMonthAccess");
+const { loadCapacitiesMap } = require("./slotCapacityStore");
 
 const CLIENT_EDITABLE_STATUSES = ["en_attente", "a_completer"];
 
@@ -156,6 +156,8 @@ async function validateClientRequestBooking({ client, body, excludeRequestId }) 
     "requestedDate timeSlotId requestedTime status _id isFullDay"
   );
 
+  const capacities = await loadCapacitiesMap();
+
   if (isFullDay) {
     const blockedSlots = await BlockedSlot.find({ date: requestedDate });
     const dayFree = isFullDayAvailable({
@@ -164,6 +166,7 @@ async function validateClientRequestBooking({ client, body, excludeRequestId }) 
       blockedSlotDocs: blockedSlots,
       requests: sameDayValidated,
       excludeRequestId,
+      capacities,
     });
     if (!dayFree) {
       return {
@@ -189,13 +192,8 @@ async function validateClientRequestBooking({ client, body, excludeRequestId }) 
     return { ok: false, status: 400, message: "Ce creneau est bloque par l'administrateur." };
   }
 
-  if (occupiedSlotsForDate(sameDayValidated, dateKey, excludeRequestId).has(timeSlotId)) {
-    return { ok: false, status: 400, message: "Ce creneau est deja reserve." };
-  }
-
-  const fullDayTaken = sameDayValidated.some((r) => isRequestFullDay(r));
-  if (fullDayTaken) {
-    return { ok: false, status: 400, message: "Cette journee est reservee en totalite par une autre demande." };
+  if (occupiedSlotsForDate(sameDayValidated, dateKey, excludeRequestId, capacities).has(timeSlotId)) {
+    return { ok: false, status: 400, message: "Ce creneau n'a plus de place disponible." };
   }
 
   return {

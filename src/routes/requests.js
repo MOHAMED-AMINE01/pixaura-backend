@@ -9,7 +9,21 @@ const {
 } = require("../utils/requestBooking");
 const { buildP2cStatusPayload, mergeP2cWorkflowRequests } = require("../utils/p2cProjects");
 const { monthBounds, P2C_COUNTING_STATUSES } = require("../utils/p2cQuota");
-const { sendRequestValidatedEmail } = require("../utils/mailer");
+const {
+  sendRequestValidatedEmail,
+  sendRequestRejectedEmail,
+  sendRequestNeedMoreInfoEmail,
+  sendRequestPendingEmail,
+} = require("../utils/mailer");
+const {
+  occupiedSlotsForDate,
+  dateKeyFromInput,
+  effectiveSlotId,
+  SLOT_IDS,
+  SLOT_LOCKING_STATUSES,
+} = require("../utils/slotBooking");
+const { isRequestFullDay } = require("../constants/timeSlots");
+const { loadCapacitiesMap } = require("../utils/slotCapacityStore");
 
 const router = express.Router();
 
@@ -111,7 +125,22 @@ router.post("/", authRequired, roleRequired("client"), async (req, res) => {
     client: client._id,
   });
 
-  res.status(201).json(created);
+  // Accusé de réception : la demande est créée en "en_attente".
+  const to = String(created.email || client.email || "").trim();
+  const emailStatus = to
+    ? await sendRequestPendingEmail({
+        to,
+        company: created.company || client.companyName,
+        requestedDate: created.requestedDate,
+        timeSlotId: created.timeSlotId,
+        isFullDay: created.isFullDay,
+        requestedTime: created.requestedTime,
+      })
+    : { sent: false, reason: "Adresse email manquante" };
+
+  const payload = created.toObject();
+  payload.emailStatus = emailStatus;
+  res.status(201).json(payload);
 });
 
 const STATUS_ENUM = ["en_attente", "validee", "refusee", "a_completer"];
@@ -126,22 +155,66 @@ router.patch("/:id/status", authRequired, roleRequired("admin"), async (req, res
   if (!existing) return res.status(404).json({ message: "Demande introuvable" });
 
   const previousStatus = existing.status;
+
+  // Contrôle de capacité : empêcher de valider au-delà du nombre de places du créneau.
+  if (nextStatus === "validee" && previousStatus !== "validee") {
+    const capacities = await loadCapacitiesMap();
+    const otherValidated = await Request.find({
+      requestedDate: existing.requestedDate,
+      status: { $in: SLOT_LOCKING_STATUSES },
+      _id: { $ne: existing._id },
+    }).select("requestedDate timeSlotId requestedTime status _id isFullDay");
+
+    const dateKey = dateKeyFromInput(existing.requestedDate);
+    const occupied = occupiedSlotsForDate(otherValidated, dateKey, null, capacities);
+
+    if (isRequestFullDay(existing)) {
+      const fullSlot = SLOT_IDS.find((sid) => occupied.has(sid));
+      if (fullSlot) {
+        return res.status(400).json({
+          message: "Impossible de valider la journée complète : un créneau est déjà complet sur cette date.",
+        });
+      }
+    } else {
+      const sid = effectiveSlotId(existing);
+      if (sid && occupied.has(sid)) {
+        return res.status(400).json({
+          message: "Impossible de valider : ce créneau a atteint sa capacité maximale.",
+        });
+      }
+    }
+  }
+
   existing.status = nextStatus;
   await existing.save();
 
   let emailStatus;
+  const to = String(existing.email || existing.client?.email || "").trim();
+  const reason = req.body.reason ? String(req.body.reason).trim() : "";
+  const baseEmail = {
+    to,
+    company: existing.company || existing.client?.companyName,
+    requestedDate: existing.requestedDate,
+    timeSlotId: existing.timeSlotId,
+    isFullDay: existing.isFullDay,
+    requestedTime: existing.requestedTime,
+  };
+
   if (nextStatus === "validee" && previousStatus !== "validee") {
-    const to = String(existing.email || existing.client?.email || "").trim();
     emailStatus = to
-      ? await sendRequestValidatedEmail({
-          to,
-          company: existing.company || existing.client?.companyName,
-          requestedDate: existing.requestedDate,
-          timeSlotId: existing.timeSlotId,
-          isFullDay: existing.isFullDay,
-          requestedTime: existing.requestedTime,
-          p2cSlot: existing.p2cSlot,
-        })
+      ? await sendRequestValidatedEmail({ ...baseEmail, p2cSlot: existing.p2cSlot })
+      : { sent: false, reason: "Adresse email manquante" };
+  } else if (nextStatus === "refusee" && previousStatus !== "refusee") {
+    emailStatus = to
+      ? await sendRequestRejectedEmail({ ...baseEmail, reason })
+      : { sent: false, reason: "Adresse email manquante" };
+  } else if (nextStatus === "a_completer" && previousStatus !== "a_completer") {
+    emailStatus = to
+      ? await sendRequestNeedMoreInfoEmail({ ...baseEmail, reason })
+      : { sent: false, reason: "Adresse email manquante" };
+  } else if (nextStatus === "en_attente" && previousStatus !== "en_attente") {
+    emailStatus = to
+      ? await sendRequestPendingEmail(baseEmail)
       : { sent: false, reason: "Adresse email manquante" };
   }
 
@@ -206,6 +279,12 @@ router.patch("/:id", authRequired, roleRequired("client"), async (req, res) => {
 
   await existing.save();
   res.json(existing);
+});
+
+router.delete("/:id", authRequired, roleRequired("admin"), async (req, res) => {
+  const request = await Request.findByIdAndDelete(req.params.id);
+  if (!request) return res.status(404).json({ message: "Demande introuvable" });
+  res.json({ message: "Demande supprimée avec succès", deletedRequest: request });
 });
 
 module.exports = router;

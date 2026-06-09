@@ -15,11 +15,13 @@ const { authRequired, roleRequired } = require("../middleware/auth");
 const { normalizeDateOnly, isWeekRuleAllowed, isPastDate } = require("../utils/calendarRules");
 const {
   TIME_SLOTS,
+  SLOT_IDS,
   isValidSlotId,
   monthAvailabilityWithSlots,
   buildDaySlotsForClient,
   buildDaySlotsForAdmin,
   SLOT_LOCKING_STATUSES,
+  DEFAULT_SLOT_CAPACITY,
 } = require("../utils/slotBooking");
 const {
   P2C_COUNTING_STATUSES,
@@ -27,6 +29,8 @@ const {
   validateP2cBooking,
   monthBounds,
 } = require("../utils/p2cQuota");
+const SlotCapacity = require("../models/SlotCapacity");
+const { loadCapacitiesMap } = require("../utils/slotCapacityStore");
 
 const router = express.Router();
 
@@ -55,6 +59,37 @@ router.delete("/blocked/:id", authRequired, roleRequired("admin"), async (req, r
 
 router.get("/slot-definitions", authRequired, (_req, res) => {
   res.json({ slots: TIME_SLOTS });
+});
+
+/** Admin : capacité (nb de clients/vidéastes) configurée par créneau. */
+router.get("/slot-capacities", authRequired, roleRequired("admin"), async (_req, res) => {
+  const map = await loadCapacitiesMap();
+  const slots = TIME_SLOTS.map((def) => ({
+    id: def.id,
+    label: def.label,
+    startTime: def.startTime,
+    endTime: def.endTime,
+    capacity: map[def.id] != null ? map[def.id] : DEFAULT_SLOT_CAPACITY,
+  }));
+  res.json({ slots, defaultCapacity: DEFAULT_SLOT_CAPACITY });
+});
+
+/** Admin : régler la capacité d'un créneau. */
+router.put("/slot-capacities", authRequired, roleRequired("admin"), async (req, res) => {
+  const { slotId } = req.body;
+  const capacity = Number(req.body.capacity);
+  if (!SLOT_IDS.includes(slotId)) {
+    return res.status(400).json({ message: "Créneau invalide." });
+  }
+  if (!Number.isFinite(capacity) || capacity < 1 || capacity > 10) {
+    return res.status(400).json({ message: "Capacité invalide (1 à 10)." });
+  }
+  const item = await SlotCapacity.findOneAndUpdate(
+    { slotId },
+    { slotId, capacity: Math.floor(capacity) },
+    { upsert: true, new: true }
+  );
+  res.json({ slotId: item.slotId, capacity: item.capacity });
 });
 
 /** Admin : liste des mois (roulant) avec état ouvert / fermé pour les clients */
@@ -146,12 +181,13 @@ router.get("/admin/day-slots", authRequired, roleRequired("admin"), async (req, 
   const dateKey = dayjs(dateRaw).format("YYYY-MM-DD");
   const requestedDate = normalizeDateOnly(dateRaw);
 
-  const [blockedDates, blockedSlots, requests] = await Promise.all([
+  const [blockedDates, blockedSlots, requests, capacities] = await Promise.all([
     BlockedDate.find(),
     BlockedSlot.find({ date: requestedDate }),
     Request.find({ requestedDate, status: { $in: ACTIVE } })
       .populate("client", "companyName email")
       .select("requestedDate timeSlotId requestedTime status client company"),
+    loadCapacitiesMap(),
   ]);
 
   const requestsJson = requests.map((r) => ({
@@ -164,6 +200,7 @@ router.get("/admin/day-slots", authRequired, roleRequired("admin"), async (req, 
     blockedDateDocs: blockedDates,
     blockedSlotDocs: blockedSlots,
     requests: requestsJson,
+    capacities,
   });
   res.json({ ...payload, slotDefinitions: TIME_SLOTS });
 });
@@ -179,7 +216,7 @@ router.get("/day-slots", authRequired, roleRequired("client"), async (req, res) 
   const year = dayjs(requestedDate).year();
   const { monthStart, monthEnd } = monthBounds(month, year);
 
-  const [client, blockedDates, blockedSlots, requests, clientMonthRequests] = await Promise.all([
+  const [client, blockedDates, blockedSlots, requests, clientMonthRequests, capacities] = await Promise.all([
     Client.findById(req.user.clientId),
     BlockedDate.find(),
     BlockedSlot.find({ date: requestedDate }),
@@ -191,6 +228,7 @@ router.get("/day-slots", authRequired, roleRequired("client"), async (req, res) 
       requestedDate: { $gte: monthStart, $lte: monthEnd },
       status: { $in: P2C_COUNTING_STATUSES },
     }).select("_id requestedDate status isFullDay timeSlotId"),
+    loadCapacitiesMap(),
   ]);
 
   if (!client) return res.status(404).json({ message: "Client introuvable" });
@@ -295,6 +333,7 @@ router.get("/day-slots", authRequired, roleRequired("client"), async (req, res) 
     blockedSlotDocs: blockedSlots,
     requests,
     excludeRequestId,
+    capacities,
   });
   res.json({ ...payload, allowedByProfile: true, p2c: p2cState, slotDefinitions: TIME_SLOTS });
 });
@@ -306,7 +345,7 @@ router.get("/availability", authRequired, roleRequired("client"), async (req, re
 
   const { monthStart, monthEnd } = monthBounds(month, year);
 
-  const [client, blockedDates, blockedSlots, requests, clientMonthRequests] = await Promise.all([
+  const [client, blockedDates, blockedSlots, requests, clientMonthRequests, capacities] = await Promise.all([
     Client.findById(req.user.clientId),
     BlockedDate.find(),
     BlockedSlot.find({ date: { $gte: monthStart, $lte: monthEnd } }),
@@ -319,6 +358,7 @@ router.get("/availability", authRequired, roleRequired("client"), async (req, re
       requestedDate: { $gte: monthStart, $lte: monthEnd },
       status: { $in: P2C_COUNTING_STATUSES },
     }).select("_id requestedDate status isFullDay timeSlotId"),
+    loadCapacitiesMap(),
   ]);
 
   if (!client) return res.status(404).json({ message: "Client introuvable" });
@@ -339,6 +379,7 @@ router.get("/availability", authRequired, roleRequired("client"), async (req, re
     p2cState: p2c,
     excludeRequestId,
     clientMonthClosed: !clientMonthOpen,
+    capacities,
   });
   res.json({ month, year, dates, p2c, clientMonthOpen, slotDefinitions: TIME_SLOTS });
 });
