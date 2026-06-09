@@ -1,0 +1,24 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+
+# Env
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Vercel
+.vercel/
+
+# OS
+Thumbs.db
+
+# Logs
+logs/
+*.log
