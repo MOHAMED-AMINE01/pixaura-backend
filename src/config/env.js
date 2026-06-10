@@ -8,7 +8,7 @@ module.exports = {
   adminEmail: process.env.ADMIN_EMAIL || "contact@pixaura.eu",
   adminPassword: process.env.ADMIN_PASSWORD || "pixaura1234@@",
   smtpHost: process.env.SMTP_HOST,
-  smtpPort: Number(process.env.SMTP_PORT || 587),
+  smtpPort: Number(process.env.SMTP_PORT || (process.env.NODE_ENV === 'production' ? 465 : 587)),
   smtpUser: process.env.SMTP_USER,
   smtpPass: process.env.SMTP_PASS,
   /**
