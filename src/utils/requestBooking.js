@@ -31,7 +31,8 @@ const REQUIRED_STRING_FIELDS = [
   ["projectDetails", "Projet / demande"],
   ["shootingAddress", "Adresse de tournage"],
   ["technicalConstraints", "Contraintes techniques"],
-  ["onsiteContact", "Contact sur place"],
+  ["onsiteContactName", "Nom du contact sur place"],
+  ["onsiteContactPhone", "N° du contact sur place"],
 ];
 
 function validateRequiredFields(body) {
@@ -51,7 +52,7 @@ function validateRequiredFields(body) {
 }
 
 const P2C_REQUEST_SELECT =
-  "_id requestedDate status isFullDay timeSlotId p2cSlot createdAt company mainContact email phone communicationAxis projectDetails shootingAddress technicalConstraints onsiteContact freeComment";
+  "_id requestedDate status isFullDay timeSlotId p2cSlot createdAt company mainContact email phone communicationAxis projectDetails shootingAddress technicalConstraints onsiteContact onsiteContactName onsiteContactPhone freeComment";
 
 async function loadClientMonthRequests(clientId, requestedDate) {
   const reqMonth = dayjs(requestedDate).month() + 1;

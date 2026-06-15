@@ -14,6 +14,7 @@ const {
   sendRequestRejectedEmail,
   sendRequestNeedMoreInfoEmail,
   sendRequestPendingEmail,
+  sendNewRequestAdminEmail,
 } = require("../utils/mailer");
 const {
   occupiedSlotsForDate,
@@ -62,7 +63,7 @@ router.get("/p2c-status", authRequired, roleRequired("client"), async (req, res)
     : undefined;
 
   const selectFields =
-    "_id requestedDate status isFullDay timeSlotId p2cSlot createdAt company mainContact email phone communicationAxis projectDetails shootingAddress technicalConstraints onsiteContact freeComment";
+    "_id requestedDate status isFullDay timeSlotId p2cSlot createdAt company mainContact email phone communicationAxis projectDetails shootingAddress technicalConstraints onsiteContact onsiteContactName onsiteContactPhone freeComment";
 
   const clientMonthRequests = await Request.find({
     client: req.user.clientId,
@@ -119,7 +120,8 @@ router.post("/", authRequired, roleRequired("client"), async (req, res) => {
     isFullDay: Boolean(check.isFullDay),
     shootingAddress: String(req.body.shootingAddress).trim(),
     technicalConstraints: String(req.body.technicalConstraints).trim(),
-    onsiteContact: String(req.body.onsiteContact).trim(),
+    onsiteContactName: String(req.body.onsiteContactName || req.body.onsiteContact || "").trim(),
+    onsiteContactPhone: String(req.body.onsiteContactPhone || "").trim(),
     freeComment: String(req.body.freeComment || "").trim(),
     p2cSlot: check.p2cSlot,
     client: client._id,
@@ -138,8 +140,30 @@ router.post("/", authRequired, roleRequired("client"), async (req, res) => {
       })
     : { sent: false, reason: "Adresse email manquante" };
 
+  // Notification admin : Pixaura est prévenu de chaque nouvelle demande.
+  // Best-effort : on n'échoue pas la création si l'email admin part mal.
+  const adminEmailStatus = await sendNewRequestAdminEmail({
+    company: created.company || client.companyName,
+    mainContact: created.mainContact,
+    email: created.email,
+    phone: created.phone,
+    communicationAxis: created.communicationAxis,
+    projectDetails: created.projectDetails,
+    requestedDate: created.requestedDate,
+    timeSlotId: created.timeSlotId,
+    isFullDay: created.isFullDay,
+    requestedTime: created.requestedTime,
+    shootingAddress: created.shootingAddress,
+    technicalConstraints: created.technicalConstraints,
+    onsiteContactName: created.onsiteContactName,
+    onsiteContactPhone: created.onsiteContactPhone,
+    freeComment: created.freeComment,
+    p2cSlot: created.p2cSlot,
+  });
+
   const payload = created.toObject();
   payload.emailStatus = emailStatus;
+  payload.adminEmailStatus = adminEmailStatus;
   res.status(201).json(payload);
 });
 
@@ -186,7 +210,9 @@ router.patch("/:id/status", authRequired, roleRequired("admin"), async (req, res
   }
 
   existing.status = nextStatus;
-  await existing.save();
+  // validateModifiedOnly : un changement de statut ne doit pas échouer si une
+  // ANCIENNE demande n'a pas tous les champs requis récents (ex. contact sur place).
+  await existing.save({ validateModifiedOnly: true });
 
   let emailStatus;
   const to = String(existing.email || existing.client?.email || "").trim();
@@ -249,7 +275,9 @@ router.patch("/:id", authRequired, roleRequired("client"), async (req, res) => {
     timeSlotId: req.body.timeSlotId ?? existing.timeSlotId,
     shootingAddress: req.body.shootingAddress ?? existing.shootingAddress,
     technicalConstraints: req.body.technicalConstraints ?? existing.technicalConstraints,
-    onsiteContact: req.body.onsiteContact ?? existing.onsiteContact,
+    onsiteContactName:
+      req.body.onsiteContactName ?? existing.onsiteContactName ?? existing.onsiteContact,
+    onsiteContactPhone: req.body.onsiteContactPhone ?? existing.onsiteContactPhone,
     freeComment: req.body.freeComment ?? existing.freeComment,
     p2cSlot: req.body.p2cSlot ?? existing.p2cSlot ?? 1,
   };
@@ -274,16 +302,30 @@ router.patch("/:id", authRequired, roleRequired("client"), async (req, res) => {
   existing.p2cSlot = check.p2cSlot;
   existing.shootingAddress = body.shootingAddress;
   existing.technicalConstraints = body.technicalConstraints;
-  existing.onsiteContact = body.onsiteContact;
+  existing.onsiteContactName = body.onsiteContactName;
+  existing.onsiteContactPhone = body.onsiteContactPhone;
   existing.freeComment = body.freeComment;
 
   await existing.save();
   res.json(existing);
 });
 
-router.delete("/:id", authRequired, roleRequired("admin"), async (req, res) => {
-  const request = await Request.findByIdAndDelete(req.params.id);
+router.delete("/:id", authRequired, async (req, res) => {
+  const request = await Request.findById(req.params.id);
   if (!request) return res.status(404).json({ message: "Demande introuvable" });
+
+  // Un client ne peut annuler que SA demande, et seulement si elle est
+  // encore annulable (en_attente / a_completer). L'admin peut tout supprimer.
+  if (req.user.role === "client") {
+    if (String(request.client) !== String(req.user.clientId)) {
+      return res.status(403).json({ message: "Acces refuse" });
+    }
+    if (!CLIENT_EDITABLE_STATUSES.includes(request.status)) {
+      return res.status(409).json({ message: "Cette demande ne peut plus être annulée." });
+    }
+  }
+
+  await request.deleteOne();
   res.json({ message: "Demande supprimée avec succès", deletedRequest: request });
 });
 

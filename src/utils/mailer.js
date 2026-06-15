@@ -351,6 +351,98 @@ ${besoin}`;
   });
 }
 
+/** 3 bis. Email admin : nouvelle demande P2C envoyée par un client. */
+async function sendNewRequestAdminEmail({
+  company,
+  mainContact,
+  email,
+  phone,
+  communicationAxis,
+  projectDetails,
+  requestedDate,
+  timeSlotId,
+  isFullDay,
+  requestedTime,
+  shootingAddress,
+  technicalConstraints,
+  onsiteContactName,
+  onsiteContactPhone,
+  freeComment,
+  p2cSlot,
+}) {
+  const axisLabel =
+    {
+      commercial: "Commercial",
+      humain: "Humain",
+      expertise: "Expertise",
+      autre: "Autre",
+    }[communicationAxis] ||
+    communicationAxis ||
+    "Non renseigné";
+  const dateLabel = requestedDate ? formatRequestDateFr(requestedDate) : "Non renseignée";
+  const slotLabel = scheduleLabelForRequest({ timeSlotId, isFullDay, requestedTime });
+
+  const infoRows = [
+    { label: "Entreprise", value: company },
+    { label: "Contact principal", value: mainContact },
+    { label: "Email", value: email },
+    { label: "Téléphone", value: phone },
+    { label: "Date de tournage", value: dateLabel },
+    { label: "Créneau", value: slotLabel },
+    p2cSlot ? { label: "Projet", value: `P2C n°${p2cSlot} du mois` } : null,
+    { label: "Axe de communication", value: axisLabel },
+    { label: "Adresse de tournage", value: shootingAddress },
+    { label: "Contact sur place", value: onsiteContactName },
+    { label: "N° contact sur place", value: onsiteContactPhone },
+  ].filter(Boolean);
+
+  const block = (titre, contenu) =>
+    contenu
+      ? `<tr><td style="padding-top:8px;"><div style="font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#8a8a9a;font-family:Arial,Helvetica,sans-serif;padding-bottom:8px;">${titre}</div><div style="font-size:15px;line-height:1.6;color:#ffffff;background-color:#1a1a24;border-radius:12px;padding:16px 18px;font-family:Arial,Helvetica,sans-serif;white-space:pre-wrap;">${escapeHtml(
+          contenu
+        )}</div></td></tr>`
+      : "";
+
+  const html = renderEmailLayout({
+    accent: "#7c33ff",
+    badge: "Nouvelle demande P2C",
+    title: "Une nouvelle demande à valider",
+    introHtml: `Un client vient d'envoyer une demande de tournage P2C. Elle est <strong style="color:#eab308;">en attente de validation</strong> dans votre espace admin.`,
+    infoRows,
+    extraHtml: `${block("Projet / demande", projectDetails)}${block(
+      "Contraintes techniques",
+      technicalConstraints
+    )}${block("Commentaire libre", freeComment)}`,
+    footerNote: "Connectez-vous à l'espace admin Pixaura pour valider ou refuser cette demande.",
+  });
+
+  const text = `Nouvelle demande P2C - PIXaura
+
+Entreprise: ${company}
+Contact principal: ${mainContact}
+Email: ${email}
+Téléphone: ${phone}
+Date de tournage: ${dateLabel}
+Créneau: ${slotLabel}${p2cSlot ? `\nProjet: P2C n°${p2cSlot} du mois` : ""}
+Axe de communication: ${axisLabel}
+Adresse de tournage: ${shootingAddress}
+Contact sur place: ${onsiteContactName} (${onsiteContactPhone})
+
+Projet / demande:
+${projectDetails}
+
+Contraintes techniques:
+${technicalConstraints}${freeComment ? `\n\nCommentaire libre:\n${freeComment}` : ""}`;
+
+  return send({
+    to: process.env.CONTACT_EMAIL || "contact@pixaura.eu",
+    replyTo: email,
+    subject: `Nouvelle demande P2C - ${company || mainContact || "client"}`,
+    html,
+    text,
+  });
+}
+
 /** 4. Email client : demande refusée (motif optionnel). */
 async function sendRequestRejectedEmail({ to, company, requestedDate, timeSlotId, isFullDay, requestedTime, reason }) {
   const companyLabel = company ? String(company).trim() : "votre société";
@@ -491,6 +583,7 @@ module.exports = {
   sendCredentialsEmail,
   sendRequestValidatedEmail,
   sendContactEmail,
+  sendNewRequestAdminEmail,
   sendRequestRejectedEmail,
   sendRequestNeedMoreInfoEmail,
   sendRequestPendingEmail,

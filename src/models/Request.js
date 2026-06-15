@@ -19,7 +19,16 @@ const requestSchema = new mongoose.Schema(
     requestedTime: { type: String, required: true },
     shootingAddress: { type: String, required: true },
     technicalConstraints: { type: String, required: true },
-    onsiteContact: { type: String, required: true },
+    /**
+     * Contact sur place : nom + numéro (séparés).
+     * Non `required` au niveau schéma pour ne pas casser le save() des
+     * ANCIENNES demandes (sans ces champs) lors d'un changement de statut admin.
+     * L'obligation côté client est assurée par requestBooking.js (REQUIRED_STRING_FIELDS).
+     */
+    onsiteContactName: { type: String, default: "" },
+    onsiteContactPhone: { type: String, default: "" },
+    /** @deprecated Ancien champ unique — conservé pour l'historique des demandes existantes. */
+    onsiteContact: { type: String, default: "" },
     freeComment: { type: String, default: "" },
     status: { type: String, enum: ["en_attente", "validee", "refusee", "a_completer"], default: "en_attente" },
   },
